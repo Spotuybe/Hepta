@@ -1,0 +1,312 @@
+
+import React, { useState, useEffect } from 'react';
+import { Camera, Music, Check, Clock, ArrowRight, AlertCircle } from 'lucide-react';
+
+const SpotifyToYouTubeConverter = () => {
+  const [url, setUrl] = useState('');
+  const [currentStage, setCurrentStage] = useState('input'); // input, loading, preview, result, error
+  const [playlistInfo, setPlaylistInfo] = useState(null);
+  const [conversionResult, setConversionResult] = useState(null);
+  const [error, setError] = useState(null);
+  const [userId, setUserId] = useState(null);
+  
+  useEffect(() => {
+    // Check if user is returning from Spotify auth
+    const urlParams = new URLSearchParams(window.location.search);
+    const userIdParam = urlParams.get('userId');
+    
+    if (userIdParam) {
+      setUserId(userIdParam);
+      // Clear the URL parameters without refreshing the page
+      window.history.replaceState({}, document.title, window.location.pathname);
+    }
+  }, []);
+
+  const handleUrlChange = (e) => {
+    setUrl(e.target.value);
+  };
+
+  const authenticateWithSpotify = async () => {
+    try {
+      setCurrentStage('loading');
+      const response = await fetch('http://localhost:3000/auth/spotify');
+      const data = await response.json();
+      
+      if (data.authUrl) {
+        // Redirect user to Spotify auth page
+        window.location.href = data.authUrl;
+      } else {
+        throw new Error('Failed to get authentication URL');
+      }
+    } catch (err) {
+      setError('Authentication failed: ' + err.message);
+      setCurrentStage('error');
+    }
+  };
+
+  const extractPlaylistId = (playlistUrl) => {
+    const match = playlistUrl.match(/playlist\/([a-zA-Z0-9]+)(\?|$)/);
+    return match ? match[1] : null;
+  };
+
+  const handleConvert = async () => {
+    // Validate URL
+    if (!url.includes('spotify.com/playlist/')) {
+      setError('Please enter a valid Spotify playlist URL');
+      setCurrentStage('error');
+      return;
+    }
+    
+    // Extract playlist ID
+    const playlistId = extractPlaylistId(url);
+    if (!playlistId) {
+      setError('Could not extract playlist ID from URL');
+      setCurrentStage('error');
+      return;
+    }
+    
+    // Check if user is authenticated
+    if (!userId) {
+      authenticateWithSpotify();
+      return;
+    }
+    
+    // Show loading screen
+    setCurrentStage('loading');
+    
+    try {
+      // Fetch playlist details
+      const response = await fetch(`http://localhost:3000/api/spotify/playlist/${playlistId}?userId=${userId}`);
+      
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || 'Failed to fetch playlist');
+      }
+      
+      const playlistData = await response.json();
+      setPlaylistInfo(playlistData);
+      setCurrentStage('preview');
+    } catch (err) {
+      setError(err.message);
+      setCurrentStage('error');
+    }
+  };
+
+  const handleConfirm = async () => {
+    // Show loading again
+    setCurrentStage('loading');
+    
+    try {
+      const response = await fetch('http://localhost:3000/api/convert/youtube', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          playlistName: playlistInfo.name,
+          tracks: playlistInfo.tracks,
+          userId: userId
+        }),
+      });
+      
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || 'Conversion failed');
+      }
+      
+      const result = await response.json();
+      setConversionResult(result);
+      setCurrentStage('result');
+    } catch (err) {
+      setError(err.message);
+      setCurrentStage('error');
+    }
+  };
+
+  const handleReset = () => {
+    setUrl('');
+    setPlaylistInfo(null);
+    setConversionResult(null);
+    setError(null);
+    setCurrentStage('input');
+  };
+
+  const renderLoadingScreen = () => (
+    <div className="flex-1 flex flex-col items-center justify-center">
+      <div className="w-16 h-16 border-4 border-t-green-500 border-gray-700 rounded-full animate-spin mb-4"></div>
+      <p className="text-lg">
+        {!playlistInfo ? 'Fetching playlist data...' : 'Converting tracks...'}
+      </p>
+    </div>
+  );
+
+  const renderPreviewScreen = () => (
+    <div className="flex-1 flex flex-col">
+      <div className="bg-gray-800 p-4 rounded mb-4">
+        <div className="flex items-center mb-3">
+          <img 
+            src={playlistInfo.thumbnailUrl || '/api/placeholder/80/80'} 
+            alt="Playlist cover" 
+            className="w-16 h-16 rounded mr-3" 
+          />
+          <div>
+            <h2 className="font-bold text-lg">{playlistInfo.name}</h2>
+            <p className="text-gray-400 text-sm">By {playlistInfo.owner}</p>
+            <div className="flex items-center text-xs text-gray-400 mt-1">
+              <Music size={12} className="mr-1" />
+              <span>{playlistInfo.tracksCount} tracks</span>
+              <Clock size={12} className="ml-3 mr-1" />
+              <span>
+                {Math.floor(playlistInfo.tracks.reduce((total, track) => 
+                  total + (track.duration || 0), 0) / 60000)} min
+              </span>
+            </div>
+          </div>
+        </div>
+        <p className="text-sm mb-2">Target Platform:</p>
+        <div className="bg-gray-700 p-2 rounded flex items-center w-28">
+          <div className="w-8 h-8 bg-red-600 rounded-full flex items-center justify-center mr-2">
+            <span className="text-sm">YT</span>
+          </div>
+          <span className="text-xs">YouTube</span>
+        </div>
+      </div>
+      
+      <div className="bg-gray-800 p-3 rounded mb-4 max-h-60 overflow-y-auto">
+        <h3 className="text-sm font-medium mb-2">Tracks to convert ({playlistInfo.tracks.length})</h3>
+        {playlistInfo.tracks.slice(0, 5).map((track, index) => (
+          <div key={index} className="text-sm py-2 border-b border-gray-700 last:border-0">
+            <div className="font-medium">{track.name}</div>
+            <div className="text-gray-400 text-xs">{track.artists}</div>
+          </div>
+        ))}
+        {playlistInfo.tracks.length > 5 && (
+          <div className="text-center text-sm text-gray-400 mt-2">
+            + {playlistInfo.tracks.length - 5} more tracks
+          </div>
+        )}
+      </div>
+      
+      <p className="text-sm mb-4">
+        We'll create a YouTube playlist with the same tracks. This may take a few minutes.
+      </p>
+      
+      <div className="mt-auto">
+        <button 
+          onClick={handleConfirm}
+          className="w-full bg-green-600 p-3 rounded font-medium mb-2"
+        >
+          Convert Playlist
+        </button>
+        <button 
+          onClick={handleReset}
+          className="w-full bg-gray-700 p-3 rounded font-medium"
+        >
+          Cancel
+        </button>
+      </div>
+    </div>
+  );
+
+  const renderResultScreen = () => (
+    <div className="flex-1 flex flex-col">
+      <div className="flex items-center justify-center flex-col mb-6 mt-8">
+        <div className="w-16 h-16 bg-green-500 rounded-full flex items-center justify-center mb-3">
+          <Check size={32} />
+        </div>
+        <h2 className="text-xl font-bold">Conversion Complete!</h2>
+      </div>
+      
+      <div className="bg-gray-800 p-4 rounded mb-6">
+        <div className="flex items-center mb-3">
+          <img 
+            src={playlistInfo?.thumbnailUrl || '/api/placeholder/80/80'} 
+            alt="YouTube playlist" 
+            className="w-16 h-16 rounded mr-3" 
+          />
+          <div>
+            <h2 className="font-bold">{conversionResult.playlistName}</h2>
+            <p className="text-gray-400 text-sm">YouTube Playlist</p>
+            <div className="flex items-center text-xs text-gray-400 mt-1">
+              <Music size={12} className="mr-1" />
+              <span>{conversionResult.tracksFound} videos</span>
+            </div>
+          </div>
+        </div>
+        
+        <div className="bg-gray-700 p-3 rounded text-sm flex items-center justify-between">
+          <span className="truncate">{conversionResult.playlistUrl}</span>
+          <button 
+            className="text-green-500 ml-2"
+            onClick={() => navigator.clipboard.writeText(conversionResult.playlistUrl)}
+          >
+            Copy
+          </button>
+        </div>
+      </div>
+      
+      <div className="bg-gray-800 p-4 rounded mb-4">
+        <h3 className="text-sm font-medium mb-2">Match Results</h3>
+        <div className="flex justify-between items-center text-sm">
+          <div>Tracks found</div>
+          <div className="text-green-500">{conversionResult.tracksFound}</div>
+        </div>
+        <div className="flex justify-between items-center text-sm">
+          <div>Tracks not found</div>
+          <div className="text-red-500">
+            {conversionResult.totalTracks - conversionResult.tracksFound}
+          </div>
+        </div>
+      </div>
+      
+      <div className="mt-auto">
+        <button 
+          onClick={handleReset}
+          className="w-full bg-green-600 p-3 rounded font-medium mb-2"
+        >
+          Start New Conversion
+        </button>
+      </div>
+    </div>
+  );
+
+  const renderErrorScreen = () => (
+    <div className="flex-1 flex flex-col items-center justify-center">
+      <div className="w-16 h-16 bg-red-500 rounded-full flex items-center justify-center mb-4">
+        <AlertCircle size={32} />
+      </div>
+      <h2 className="text-xl font-bold mb-2">Error</h2>
+      <p className="text-center mb-6">{error}</p>
+    </div>
+  );
+
+  return (
+    <div className="flex flex-col h-full">
+      {currentStage === 'loading' && renderLoadingScreen()}
+      {currentStage === 'preview' && renderPreviewScreen()}
+      {currentStage === 'result' && renderResultScreen()}
+      {currentStage === 'error' && renderErrorScreen()}
+      {currentStage === 'input' && (
+        <div className="flex-1 flex flex-col items-center justify-center p-6">
+          <h1 className="text-2xl font-bold mb-4">Spotify to YouTube Converter</h1>
+          <p className="text-lg mb-6">Convert your Spotify playlists to YouTube easily.</p>
+          <input
+            type="text"
+            className="border rounded p-2 mb-4 w-full max-w-md"
+            placeholder="Enter Spotify playlist URL"
+            value={url}
+            onChange={handleUrlChange}
+          />
+          <button
+            onClick={handleConvert}
+            className="bg-blue-500 text-white p-3 rounded font-medium w-full max-w-md"
+          >
+            Convert
+          </button>
+        </div>
+      )}
+    </div>
+  );
+};
+
+export default SpotifyToYouTubeConverter;
